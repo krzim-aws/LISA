@@ -15,20 +15,17 @@
 */
 
 // LISA-serve Stack.
-import path from 'path';
 
 import { Stack, StackProps } from 'aws-cdk-lib';
 import { AttributeType, BillingMode, Table, TableEncryption } from 'aws-cdk-lib/aws-dynamodb';
 import { StringParameter } from 'aws-cdk-lib/aws-ssm';
 import { Construct } from 'constructs';
 
-import { EcsModel } from './ecs-model';
+import { Model } from './model';
 import { FastApiContainer } from '../api-base/fastApiContainer';
 import { createCdkId, getModelIdentifier } from '../core/utils';
 import { Vpc } from '../networking/vpc';
 import { BaseProps, ModelType, RegisteredModel } from '../schema';
-
-const HERE = path.resolve(__dirname);
 
 interface CustomLisaStackProps extends BaseProps {
   vpc: Vpc;
@@ -56,7 +53,7 @@ export class LisaServeApplicationStack extends Stack {
 
     // Create DynamoDB Table for enabling API token usage
     const tokenTable = new Table(this, 'TokenTable', {
-      tableName: 'LISAApiTokenTable',
+      tableName: `${config.deploymentName}-LISAApiTokenTable`,
       partitionKey: {
         name: 'token',
         type: AttributeType.STRING,
@@ -66,32 +63,14 @@ export class LisaServeApplicationStack extends Stack {
       removalPolicy: config.removalPolicy,
     });
 
-    // Create REST API
-    const restApi = new FastApiContainer(this, 'RestApi', {
-      apiName: 'REST',
-      config: config,
-      resourcePath: path.join(HERE, 'rest-api'),
-      securityGroup: vpc.securityGroups.restApiAlbSg,
-      taskConfig: config.restApiConfig,
-      tokenTable: tokenTable,
-      vpc: vpc.vpc,
-    });
-
-    // Create Parameter Store entry with RestAPI URI
-    this.endpointUrl = new StringParameter(this, createCdkId(['LisaServeRestApiUri', 'StringParameter']), {
-      parameterName: `${config.deploymentPrefix}/lisaServeRestApiUri`,
-      stringValue: restApi.endpoint,
-      description: 'URI for LISA Serve API',
-    });
-
     // Register all models
     const registeredModels: RegisteredModel[] = [];
 
     // Create ECS models
-    for (const modelConfig of config.ecsModels) {
+    for (const modelConfig of config.models) {
       if (modelConfig.deploy) {
         // Create ECS Model Construct
-        const ecsModel = new EcsModel(this, createCdkId([getModelIdentifier(modelConfig), 'EcsModel']), {
+        const ecsModel = new Model(this, createCdkId([getModelIdentifier(modelConfig), 'EcsModel']), {
           config: config,
           modelConfig: modelConfig,
           securityGroup: vpc.securityGroups.ecsModelAlbSg,
@@ -100,7 +79,7 @@ export class LisaServeApplicationStack extends Stack {
 
         // Create metadata to register model in parameter store
         const registeredModel: RegisteredModel = {
-          provider: `${modelConfig.modelHosting}.${modelConfig.modelType}.${modelConfig.inferenceContainer}`,
+          provider: `${modelConfig.serverType}.${modelConfig.modelType}.${modelConfig.inferenceEngine}`,
           // modelId is used for LiteLLM config to differentiate the same model deployed with two different containers
           modelId: modelConfig.modelId ? modelConfig.modelId : modelConfig.modelName,
           modelName: modelConfig.modelName,
@@ -123,10 +102,27 @@ export class LisaServeApplicationStack extends Stack {
       description: 'Serialized JSON of registered models data',
     });
 
-    this.modelsPs.grantRead(restApi.taskRole);
-    // Add parameter as container environment variable for both RestAPI and RagAPI
-    restApi.container.addEnvironment('REGISTERED_MODELS_PS_NAME', this.modelsPs.parameterName);
+    // Create REST API
+    const restApi = new FastApiContainer(this, 'RestApi', {
+      apiName: 'REST',
+      config: config,
+      securityGroup: vpc.securityGroups.restApiAlbSg,
+      taskConfig: config.restApiConfig,
+      tokenTable: tokenTable,
+      modelsPsName: this.modelsPs.parameterName,
+      vpc: vpc.vpc,
+    });
     restApi.node.addDependency(this.modelsPs);
+
+    // Create Parameter Store entry with RestAPI URI
+    this.endpointUrl = new StringParameter(this, createCdkId(['LisaServeRestApiUri', 'StringParameter']), {
+      parameterName: `${config.deploymentPrefix}/lisaServeRestApiUri`,
+      stringValue: restApi.endpoint,
+      description: 'URI for LISA Serve API',
+    });
+
+    // Grant read permissions to the task role for the model parameter store
+    this.modelsPs.grantRead(restApi.taskRole);
 
     // Update
     this.restApi = restApi;

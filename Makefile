@@ -96,7 +96,7 @@ ifneq ($(findstring $(DEPLOYMENT_STAGE),$(STACK)),$(DEPLOYMENT_STAGE))
 endif
 
 # MODEL_IDS - IDs of models to deploy
-MODEL_IDS := $(shell cat $(PROJECT_DIR)/config.yaml | yq '.$(ENV).ecsModels[].modelName')
+MODEL_IDS := $(shell cat $(PROJECT_DIR)/config.yaml | yq '.$(ENV).models[].modelName')
 
 # MODEL_BUCKET - S3 bucket containing model artifacts
 MODEL_BUCKET := $(shell cat $(PROJECT_DIR)/config.yaml | yq '.$(ENV).s3BucketModels')
@@ -180,7 +180,7 @@ modelCheck:
 						echo "What is your huggingface access token? "; \
 						read -s access_token; \
 						echo "Converting and uploading safetensors for model: $(MODEL_ID)"; \
-						tgiImage=$$(yq '[.$(ENV).ecsModels[] | select(.inferenceContainer == "tgi") | .containerConfig.image.baseImage] | first' $(PROJECT_DIR)/config.yaml | sed "s/^['\"]//;s/['\"]$$//"); \
+						tgiImage=$$(yq '[.$(ENV).models[] | select(.inferenceContainer == "tgi") | .containerConfig.image.baseImage] | first' $(PROJECT_DIR)/config.yaml | sed "s/^['\"]//;s/['\"]$$//"); \
 						echo $$tgiImage; \
 						$(PROJECT_DIR)/scripts/convert-and-upload-model.sh -m $(MODEL_ID) -s $(MODEL_BUCKET) -a $$access_token -t $$tgiImage -d $$localModelDir; \
 				fi; \

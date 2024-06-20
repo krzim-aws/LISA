@@ -17,12 +17,12 @@
 import { CfnOutput } from 'aws-cdk-lib';
 import { ITable } from 'aws-cdk-lib/aws-dynamodb';
 import { SecurityGroup, IVpc } from 'aws-cdk-lib/aws-ec2';
-import { AmiHardwareType, ContainerDefinition } from 'aws-cdk-lib/aws-ecs';
+import { AmiHardwareType } from 'aws-cdk-lib/aws-ecs';
 import { IRole } from 'aws-cdk-lib/aws-iam';
 import { Construct } from 'constructs';
 import { dump as yamlDump } from 'js-yaml';
 
-import { ECSCluster } from './ecsCluster';
+import { ServerCluster } from './cluster';
 import { BaseProps, Ec2Metadata, EcsSourceType, FastApiContainerConfig } from '../schema';
 
 // This is the amount of memory to buffer (or subtract off) from the total instance memory, if we don't include this,
@@ -34,13 +34,17 @@ const CONTAINER_MEMORY_BUFFER = 1024 * 2;
  *
  * @property {IVpc} vpc - The virtual private cloud (VPC).
  * @property {SecurityGroup} securityGroups - The security groups of the application.
+ * @property {string} apiName - The name of the API.
+ * @property {FastApiContainerConfig} taskConfig - The configuration for the task.
+ * @property {string} modelsPsName - The name of the models Parameter Store value.
+ * @property {ITable} tokenTable - The DynamoDB table for API tokens.
  */
 interface FastApiContainerProps extends BaseProps {
   apiName: string;
-  resourcePath: string;
   securityGroup: SecurityGroup;
   taskConfig: FastApiContainerConfig;
   tokenTable: ITable;
+  modelsPsName: string;
   vpc: IVpc;
 }
 
@@ -48,9 +52,6 @@ interface FastApiContainerProps extends BaseProps {
  * FastApiContainer Construct.
  */
 export class FastApiContainer extends Construct {
-  /** FastAPI container */
-  public readonly container: ContainerDefinition;
-
   /** FastAPI IAM task role */
   public readonly taskRole: IRole;
 
@@ -65,7 +66,7 @@ export class FastApiContainer extends Construct {
   constructor(scope: Construct, id: string, props: FastApiContainerProps) {
     super(scope, id);
 
-    const { config, securityGroup, taskConfig, tokenTable, vpc } = props;
+    const { config, apiName, securityGroup, taskConfig, tokenTable, modelsPsName, vpc } = props;
 
     let buildArgs: Record<string, string> | undefined = undefined;
     if (taskConfig.containerConfig.image.type === EcsSourceType.ASSET) {
@@ -84,35 +85,31 @@ export class FastApiContainer extends Construct {
       AUTHORITY: config.authConfig.authority,
       CLIENT_ID: config.authConfig.clientId,
       TOKEN_TABLE_NAME: tokenTable.tableName,
+      REGISTERED_MODELS_PS_NAME: modelsPsName,
     };
 
-    const apiCluster = new ECSCluster(scope, `${id}-ECSCluster`, {
+    const apiCluster = new ServerCluster(scope, `${id}-Cluster`, {
       config,
-      ecsConfig: {
-        amiHardwareType: AmiHardwareType.STANDARD,
-        autoScalingConfig: taskConfig.autoScalingConfig,
-        buildArgs,
-        containerConfig: taskConfig.containerConfig,
-        containerMemoryBuffer: CONTAINER_MEMORY_BUFFER,
-        environment,
-        identifier: props.apiName,
-        instanceType: taskConfig.instanceType,
-        internetFacing: true,
-        loadBalancerConfig: taskConfig.loadBalancerConfig,
-      },
+      amiHardwareType: AmiHardwareType.STANDARD,
+      taskConfig: taskConfig,
+      buildArgs,
+      containerMemoryBuffer: CONTAINER_MEMORY_BUFFER,
+      environment,
+      identifier: apiName,
+      internetFacing: true,
       securityGroup,
       vpc,
     });
+
     tokenTable.grantReadData(apiCluster.taskRole);
 
     this.endpoint = apiCluster.endpointUrl;
 
     // Update
-    this.container = apiCluster.container;
     this.taskRole = apiCluster.taskRole;
 
     // CFN output
-    new CfnOutput(this, `${props.apiName}Url`, {
+    new CfnOutput(this, `${apiName}Url`, {
       value: apiCluster.endpointUrl,
     });
   }

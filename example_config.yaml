@@ -54,6 +54,8 @@ dev:
     domainName:
   restApiConfig:
     apiVersion: v2
+    # serverType: ec2
+    # amiNamePattern: al2023-ami-2023*
     instanceType: m5.large
     containerConfig:
       image:
@@ -116,6 +118,8 @@ dev:
   ecsModels:
     - modelName: mistralai/Mistral-7B-Instruct-v0.2
       modelId: mistral7b
+      # serverType: ec2
+      # amiNamePattern: Deep Learning OSS Nvidia Driver AMI GPU PyTorch 2.2.0 (Ubuntu 20.04)*
       deploy: true
       streaming: true
       modelType: textgen
@@ -124,7 +128,7 @@ dev:
       containerConfig:
         image:
           baseImage: ghcr.io/huggingface/text-generation-inference:2.0.1
-          path: lib/serve/ecs-model/textgen/tgi
+          path: lib/serve/model/textgen/tgi
           type: asset
         sharedMemorySize: 2048
         healthCheckConfig:
@@ -156,6 +160,8 @@ dev:
           unhealthyThresholdCount: 10
     - modelName: intfloat/e5-large-v2
       modelId: e5v2
+      # serverType: ec2
+      # amiNamePattern: Deep Learning OSS Nvidia Driver AMI GPU PyTorch 2.2.0 (Ubuntu 20.04)*
       deploy: true
       modelType: embedding
       instanceType: g5.xlarge
@@ -163,7 +169,7 @@ dev:
       containerConfig:
         image:
           baseImage: ghcr.io/huggingface/text-embeddings-inference:1.2.3
-          path: lib/serve/ecs-model/embedding/tei
+          path: lib/serve/model/embedding/tei
           type: asset
         sharedMemorySize: 2048
         healthCheckConfig:
@@ -202,7 +208,7 @@ dev:
     #   containerConfig:
     #     image:
     #       baseImage: ghcr.io/huggingface/text-generation-inference:2.0.1
-    #       path: lib/serve/ecs-model/textgen/tgi
+    #       path: lib/serve/model/textgen/tgi
     #       type: asset
     #     sharedMemorySize: 2048
     #     healthCheckConfig:

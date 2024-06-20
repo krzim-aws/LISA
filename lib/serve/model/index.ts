@@ -14,13 +14,13 @@
   limitations under the License.
 */
 
-// ECS Model Construct.
+// Model Construct.
 import { SecurityGroup, IVpc } from 'aws-cdk-lib/aws-ec2';
 import { AmiHardwareType } from 'aws-cdk-lib/aws-ecs';
 import { Bucket } from 'aws-cdk-lib/aws-s3';
 import { Construct } from 'constructs';
 
-import { ECSCluster } from '../../api-base/ecsCluster';
+import { ServerCluster } from '../../api-base/cluster';
 import { getModelIdentifier } from '../../core/utils';
 import { BaseProps, Config, Ec2Metadata, EcsSourceType, ModelConfig } from '../../schema';
 
@@ -29,48 +29,43 @@ import { BaseProps, Config, Ec2Metadata, EcsSourceType, ModelConfig } from '../.
 const CONTAINER_MEMORY_BUFFER = 1024 * 5;
 
 /**
- * Properties for the EcsModel Construct.
+ * Properties for the Model Construct.
  *
  * @property {IVpc} vpc - The virtual private cloud (VPC).
- * @property {SecurityGroup} securityGroup - The security group to use for the ECS cluster
+ * @property {SecurityGroup} securityGroup - The security group to use for the model cluster
  * @property {ModelConfig} modelConfig - The model configuration.
  */
-interface ECSModelProps extends BaseProps {
+interface ModelProps extends BaseProps {
   modelConfig: ModelConfig;
   securityGroup: SecurityGroup;
   vpc: IVpc;
 }
 
 /**
- * Create an ECS model.
+ * Create a hosted model.
  */
-export class EcsModel extends Construct {
+export class Model extends Construct {
   /** Model endpoint URL of application load balancer. */
   public readonly endpointUrl: string;
 
   /**
    * @param {Construct} scope - The parent or owner of the construct.
    * @param {string} id - The unique identifier for the construct within its scope.
-   * @param {ECSModelProps} props - The properties of the construct.
+   * @param {ModelProps} props - The properties of the construct.
    */
-  constructor(scope: Construct, id: string, props: ECSModelProps) {
+  constructor(scope: Construct, id: string, props: ModelProps) {
     super(scope, id);
     const { config, modelConfig, securityGroup, vpc } = props;
 
-    const modelCluster = new ECSCluster(scope, `${id}-ECC`, {
+    const modelCluster = new ServerCluster(scope, `${id}-ECC`, {
       config,
-      ecsConfig: {
-        amiHardwareType: AmiHardwareType.GPU,
-        autoScalingConfig: modelConfig.autoScalingConfig,
-        buildArgs: this.getBuildArguments(config, modelConfig),
-        containerConfig: modelConfig.containerConfig,
-        containerMemoryBuffer: CONTAINER_MEMORY_BUFFER,
-        environment: this.getEnvironmentVariables(config, modelConfig),
-        identifier: getModelIdentifier(modelConfig),
-        instanceType: modelConfig.instanceType,
-        internetFacing: false,
-        loadBalancerConfig: modelConfig.loadBalancerConfig,
-      },
+      amiHardwareType: AmiHardwareType.GPU,
+      taskConfig: modelConfig,
+      buildArgs: this.getBuildArguments(config, modelConfig),
+      containerMemoryBuffer: CONTAINER_MEMORY_BUFFER,
+      environment: this.getEnvironmentVariables(config, modelConfig),
+      identifier: getModelIdentifier(modelConfig),
+      internetFacing: false,
       securityGroup,
       vpc,
     });

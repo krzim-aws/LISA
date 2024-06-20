@@ -20,7 +20,6 @@ import * as path from 'path';
 
 import * as cdk from 'aws-cdk-lib';
 import * as ec2 from 'aws-cdk-lib/aws-ec2';
-import { AmiHardwareType } from 'aws-cdk-lib/aws-ecs';
 import * as lambda from 'aws-cdk-lib/aws-lambda';
 import { z } from 'zod';
 
@@ -66,6 +65,14 @@ export enum EcsSourceType {
   ECR = 'ecr',
   REGISTRY = 'registry',
   TARBALL = 'tarball',
+}
+
+/**
+ * Enum for different types of server backends.
+ */
+export enum ServerType {
+  EC2 = 'ec2',
+  ECS = 'ecs',
 }
 
 /**
@@ -448,87 +455,50 @@ const AutoScalingConfigSchema = z.object({
 });
 
 /**
- * Configuration schema for an ECS model.
+ * Base configuration schema for a task.
  *
- * @property {AmiHardwareType} amiHardwareType - Name of the model.
- * @property {AutoScalingConfigSchema} autoScalingConfig - Configuration for auto scaling settings.
- * @property {Record<string,string>} buildArgs - Optional build args to be applied when creating the
- *                                              task container if containerConfig.image.type is ASSET
+ * @property {ServerType} serverType - Type of server to use for the task.
  * @property {ContainerConfig} containerConfig - Configuration for the container.
- * @property {number} [containerMemoryBuffer=2048] - This is the amount of memory to buffer (or subtract off)
- *                                                from the total instance memory, if we don't include this,
- *                                                the container can have a hard time finding available RAM
- *                                                resources to start and the tasks will fail deployment
- * @property {Record<string,string>} environment - Environment variables set on the task container
- * @property {identifier} modelType - Unique identifier for the cluster which will be used when naming resources
  * @property {string} instanceType - EC2 instance type for running the model.
- * @property {boolean} [internetFacing=false] - Whether or not the cluster will be configured as internet facing
+ * @property {AutoScalingConfigSchema} autoScalingConfig - Configuration for auto scaling settings.
  * @property {LoadBalancerConfig} loadBalancerConfig - Configuration for load balancer settings.
  */
-const EcsBaseConfigSchema = z.object({
-  amiHardwareType: z.nativeEnum(AmiHardwareType),
-  autoScalingConfig: AutoScalingConfigSchema,
-  buildArgs: z.record(z.string()).optional(),
+const TaskConfigSchema = z.object({
+  serverType: z.nativeEnum(ServerType).optional().default(ServerType.ECS),
   containerConfig: ContainerConfigSchema,
-  containerMemoryBuffer: z.number().default(1024 * 2),
-  environment: z.record(z.string()),
-  identifier: z.string(),
   instanceType: z.enum(VALID_INSTANCE_KEYS),
-  internetFacing: z.boolean().default(false),
+  autoScalingConfig: AutoScalingConfigSchema,
   loadBalancerConfig: LoadBalancerConfigSchema,
+  amiNamePattern: z.string().optional(),
 });
 
-/**
- * Type representing configuration for an ECS model.
- */
-type EcsBaseConfig = z.infer<typeof EcsBaseConfigSchema>;
+export type TaskConfig = z.infer<typeof TaskConfigSchema>;
 
 /**
- * Union model type representing various model configurations.
- */
-export type ECSConfig = EcsBaseConfig;
-
-/**
- * Configuration schema for an ECS model.
+ * Base configuration schema for a model.
  *
+ * @property {string} [localModelCode='/opt/model-code'] - Path in container for local model code.
  * @property {string} modelName - Name of the model.
  * @property {string} modelId - An optional short id to use when creating cdk ids for model related
  *                              resources
  * @property {boolean} [deploy=true] - Whether to deploy model.
  * @property {boolean} [streaming=null] - Whether the model supports streaming.
  * @property {string} modelType - Type of model.
- * @property {string} instanceType - EC2 instance type for running the model.
- * @property {string} inferenceContainer - Prebuilt inference container for serving model.
- * @property {ContainerConfig} containerConfig - Configuration for the container.
- * @property {AutoScalingConfigSchema} autoScalingConfig - Configuration for auto scaling settings.
- * @property {LoadBalancerConfig} loadBalancerConfig - Configuration for load balancer settings.
- * @property {string} [localModelCode='/opt/model-code'] - Path in container for local model code.
- * @property {string} [modelHosting='ecs'] - Model hosting.
+ * @property {string} inferenceEngine - Name of inference engine.
  */
-const EcsModelConfigSchema = z
-  .object({
-    modelName: z.string(),
-    modelId: z.string().optional(),
-    deploy: z.boolean().default(true),
-    streaming: z.boolean().nullable().default(null),
-    modelType: z.nativeEnum(ModelType),
-    instanceType: z.enum(VALID_INSTANCE_KEYS),
-    inferenceContainer: z
-      .union([z.literal('tgi'), z.literal('tei'), z.literal('instructor'), z.literal('vllm')])
-      .refine((data) => {
-        return !data.includes('.'); // string cannot contain a period
-      }),
-    containerConfig: ContainerConfigSchema,
-    autoScalingConfig: AutoScalingConfigSchema,
-    loadBalancerConfig: LoadBalancerConfigSchema,
-    localModelCode: z.string().default('/opt/model-code'),
-    modelHosting: z
-      .string()
-      .default('ecs')
-      .refine((data) => {
-        return !data.includes('.'); // string cannot contain a period
-      }),
-  })
+const ModelConfigSchema = TaskConfigSchema.extend({
+  localModelCode: z.string().default('/opt/model-code'),
+  modelName: z.string(),
+  modelId: z.string().optional(),
+  deploy: z.boolean().default(true),
+  streaming: z.boolean().nullable().default(null),
+  modelType: z.nativeEnum(ModelType),
+  inferenceEngine: z
+    .union([z.literal('tgi'), z.literal('tei'), z.literal('instructor'), z.literal('vllm')])
+    .refine((data) => {
+      return !data.includes('.'); // string cannot contain a period
+    }),
+})
   .refine(
     (data) => {
       // 'textgen' type must have boolean streaming, 'embedding' type must have null streaming
@@ -542,17 +512,21 @@ const EcsModelConfigSchema = z
             For 'embedding' models, 'streaming' must not be set.`,
       path: ['streaming'],
     },
+  )
+  .refine(
+    (data) => {
+      return data.amiNamePattern || data.serverType !== ServerType.EC2;
+    },
+    {
+      message: `An AMI name search pattern must be provided for EC2 based deployments`,
+      path: ['amiNamePattern'],
+    },
   );
 
 /**
- * Type representing configuration for an ECS model.
+ * Type representing configuration for a model.
  */
-type EcsModelConfig = z.infer<typeof EcsModelConfigSchema>;
-
-/**
- * Union model type representing various model configurations.
- */
-export type ModelConfig = EcsModelConfig;
+export type ModelConfig = z.infer<typeof ModelConfigSchema>;
 
 /**
  * Configuration schema for authorization.
@@ -574,18 +548,24 @@ const AuthConfigSchema = z.object({
 /**
  * Configuration schema for REST API.
  *
- * @property {string} instanceType - EC2 instance type.
- * @property {ContainerConfig} containerConfig - Configuration for the container.
- * @property {AutoScalingConfigSchema} autoScalingConfig - Configuration for auto scaling settings.
- * @property {LoadBalancerConfig} loadBalancerConfig - Configuration for load balancer settings.
+ * @property {string} apiVersion - The version of the API.
  */
-const FastApiContainerConfigSchema = z.object({
+const FastApiContainerConfigSchema = TaskConfigSchema.extend({
   apiVersion: z.literal('v2'),
-  instanceType: z.enum(VALID_INSTANCE_KEYS),
-  containerConfig: ContainerConfigSchema,
-  autoScalingConfig: AutoScalingConfigSchema,
-  loadBalancerConfig: LoadBalancerConfigSchema,
-});
+}).refine(
+  (data) => {
+    return data.amiNamePattern || data.serverType !== ServerType.EC2;
+  },
+  {
+    message: `An AMI name search pattern must be provided for EC2 based deployments`,
+    path: ['amiNamePattern'],
+  },
+);
+
+/**
+ * Type representing configuration for an FastAPI container.
+ */
+export type FastApiContainerConfig = z.infer<typeof FastApiContainerConfigSchema>;
 
 /**
  * Enum for different types of RAG repositories available
@@ -799,7 +779,7 @@ const LiteLLMConfig = z.object({
  * @property {FastApiContainerConfigSchema} restApiConfig - REST API configuration.
  * @property {RagRepositoryConfigSchema} ragRepositoryConfig - Rag Repository configuration.
  * @property {RagFileProcessingConfigSchema} ragFileProcessingConfig - Rag file processing configuration.
- * @property {EcsModelConfigSchema[]} ecsModels - Array of ECS model configurations.
+ * @property {odelConfigSchema[]} models - Array of model configurations.
  * @property {ApiGatewayConfigSchema} apiGatewayConfig - API Gateway Endpoint configuration.
  * @property {string} [nvmeHostMountPath='/nvme'] - Host path for NVMe drives.
  * @property {string} [nvmeContainerMountPath='/nvme'] - Container path for NVMe drives.
@@ -853,7 +833,7 @@ const RawConfigSchema = z
     ragRepositories: z.array(RagRepositoryConfigSchema),
     ragFileProcessingConfig: RagFileProcessingConfigSchema,
     restApiConfig: FastApiContainerConfigSchema,
-    ecsModels: z.array(EcsModelConfigSchema),
+    models: z.array(ModelConfigSchema),
     apiGatewayConfig: ApiGatewayConfigSchema,
     nvmeHostMountPath: z.string().default('/nvme'),
     nvmeContainerMountPath: z.string().default('/nvme'),
@@ -945,8 +925,6 @@ export const ConfigSchema = RawConfigSchema.transform((rawConfig) => {
  * Application configuration type.
  */
 export type Config = z.infer<typeof ConfigSchema>;
-
-export type FastApiContainerConfig = z.infer<typeof FastApiContainerConfigSchema>;
 
 /**
  * Basic properties required for a stack definition in CDK.

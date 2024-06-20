@@ -161,7 +161,7 @@ export class UserInterfaceStack extends Stack {
       },
     );
 
-    const ecsModels = config.ecsModels.map((modelConfig) => {
+    const ecsModels = config.models.map((modelConfig) => {
       return {
         model: modelConfig.modelId,
         streaming: modelConfig.streaming,

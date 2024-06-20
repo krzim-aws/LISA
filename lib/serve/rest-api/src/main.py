@@ -83,7 +83,7 @@ async def lifespan(app: FastAPI):  # type: ignore
         registered_models = json.loads(response["Parameter"]["Value"])
         for model in registered_models:
             provider = model["provider"]
-            # provider format is `modelHosting.modelType.inferenceContainer`, example: "ecs.textgen.tgi"
+            # provider format is `serverType.modelType.inferenceContainer`, example: "ecs.textgen.tgi"
             [_, _, inference_container] = provider.split(".")
             model_name = model["modelName"]
             model_type = model["modelType"]

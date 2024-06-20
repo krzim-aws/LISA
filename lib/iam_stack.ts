@@ -22,7 +22,7 @@ import { NagSuppressions } from 'cdk-nag';
 import { Construct } from 'constructs';
 
 import { createCdkId, getIamPolicyStatements, getModelIdentifier } from './core/utils';
-import { BaseProps } from './schema';
+import { BaseProps, ServerType } from './schema';
 
 /**
  * Properties for the LisaServeIAMStack Construct.
@@ -114,28 +114,36 @@ export class LisaServeIAMStack extends Stack {
       {
         id: 'REST',
         type: ECSTaskType.API,
+        serverType: config.restApiConfig.serverType,
       },
     ];
-    for (const modelConfig of config.ecsModels) {
+    for (const modelConfig of config.models) {
       if (modelConfig.deploy) {
         ecsRoles.push({
           id: getModelIdentifier(modelConfig),
           type: ECSTaskType.MODEL,
+          serverType: modelConfig.serverType,
         });
       }
     }
     ecsRoles.forEach((role) => {
       const roleName = createCdkId([config.deploymentName, role.id, 'Role']);
       const taskRole = new Role(this, createCdkId([role.id, 'Role']), {
-        assumedBy: new ServicePrincipal('ecs-tasks.amazonaws.com'),
+        assumedBy: new ServicePrincipal(
+          role.serverType === ServerType.ECS ? 'ecs-tasks.amazonaws.com' : 'ec2.amazonaws.com',
+        ),
         roleName,
-        description: `Allow ${role.id} ${role.type} ECS task access to AWS resources`,
+        description: `Allow ${role.id} ${role.type} ${
+          role.serverType === ServerType.ECS ? 'ECS' : 'EC2'
+        } task access to AWS resources`,
         managedPolicies: [taskPolicy],
       });
       new StringParameter(this, createCdkId([config.deploymentName, role.id, 'SP']), {
         parameterName: `${config.deploymentPrefix}/roles/${role.id}`,
         stringValue: taskRole.roleArn,
-        description: `Role ARN for LISA ${role.type} ${role.id} ECS Task`,
+        description: `Role ARN for LISA ${role.type} ${role.id} ${
+          role.serverType === ServerType.ECS ? 'ECS' : 'EC2'
+        } Task`,
       });
     });
   }

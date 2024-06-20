@@ -298,7 +298,7 @@ you can do so.
         containerConfig:
           image:
             baseImage: vllm/vllm-openai:v0.5.0 # vLLM-specific config
-            path: lib/serve/ecs-model/vllm # vLLM-specific config
+            path: lib/serve/model/vllm # vLLM-specific config
     ```
 - If you are deploying the LISA Chat User Interface you can optionally specify the path to the pre-built
   website assets using the top level `webAppAssetsPath` parameter in `config.yaml`. Specifying this path
@@ -438,7 +438,7 @@ AutoModelForSeq2SeqLM.from_pretrained(<model>, device_map="auto")
 
 ### HuggingFace Embedding Models
 
-Embedding models often utilize custom codebases and are not as uniform as generation models. For this reason you will likely need to create a new `inferenceContainer`. Follow the [example](./lib/ecs-model/embedding/instructor) provided for the `instructor` model.
+Embedding models often utilize custom codebases and are not as uniform as generation models. For this reason you will likely need to create a new `inferenceContainer`. Follow the [example](./lib/model/embedding/instructor) provided for the `instructor` model.
 
 ### vLLM Models
 
