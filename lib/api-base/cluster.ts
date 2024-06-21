@@ -15,16 +15,26 @@
 */
 
 // Server Cluster Construct.
-import { Duration, RemovalPolicy } from 'aws-cdk-lib';
+import { CfnElement, Duration, RemovalPolicy, Stack } from 'aws-cdk-lib';
 import {
   AutoScalingGroup,
   BlockDeviceVolume,
   GroupMetrics,
+  HealthCheck as AsgHealthCheck,
   Monitoring,
+  Signals,
   UpdatePolicy,
 } from 'aws-cdk-lib/aws-autoscaling';
 import { Metric, Stats } from 'aws-cdk-lib/aws-cloudwatch';
-import { InstanceType, LookupMachineImage, SecurityGroup, IVpc } from 'aws-cdk-lib/aws-ec2';
+import {
+  InstanceType,
+  IVpc,
+  LookupMachineImage,
+  MultipartBody,
+  MultipartUserData,
+  SecurityGroup,
+  UserData,
+} from 'aws-cdk-lib/aws-ec2';
 import { Repository } from 'aws-cdk-lib/aws-ecr';
 import { DockerImageAsset } from 'aws-cdk-lib/aws-ecr-assets';
 import {
@@ -130,8 +140,183 @@ export class ServerCluster extends Construct {
       });
     }
 
+    // Configure user data script and mount NVMe
+    const volumes: Volume[] = [];
+    const mountPoints: MountPoint[] = [];
+    /* eslint-disable no-useless-escape */
+    let rawUserDataScript = `#!/bin/bash
+      set -ex
+
+      # Determine the package manager
+      if command -v dnf &> /dev/null; then
+          INSTALL_CMD="dnf install -y"
+      elif command -v yum &> /dev/null; then
+          INSTALL_CMD="yum install -y"
+      else
+          echo "Neither dnf nor yum package manager found. Exiting."
+          exit 1
+      fi
+
+      # Function to retry a command
+      retry() {
+          local n=1
+          local max=5
+          local delay=5
+          while true; do
+              "$@" && break || {
+                  if [[ $n -lt $max ]]; then
+                      ((n++))
+                      echo "Command failed. Attempt $n/$max:"
+                      sleep $delay;
+                  else
+                      echo "The command has failed after $n attempts."
+                      return 1
+                  fi
+              }
+          done
+      }
+
+      # Install Docker if not installed
+      if ! command -v docker &> /dev/null; then
+          retry $INSTALL_CMD docker
+          service docker start
+      fi
+
+      # Install AWS CFN Bootstrap scripts if not installed
+      if ! command -v /opt/aws/bin/cfn-signal &> /dev/null; then
+          retry $INSTALL_CMD aws-cfn-bootstrap
+      fi
+    `;
+
+    // If NVMe drive available, mount and use it
+    if (Ec2Metadata.get(taskConfig.instanceType).nvmePath) {
+      // EC2 user data to mount ephemeral NVMe drive
+      const mountPath = config.nvmeHostMountPath;
+      const nvmePath = Ec2Metadata.get(taskConfig.instanceType).nvmePath;
+      rawUserDataScript += `
+        # Check if NVMe is already formatted
+        if ! blkid ${nvmePath}; then
+            mkfs.xfs ${nvmePath}
+        fi
+
+        # Check if the NVMe drive is already mounted
+        if ! findmnt -rno SOURCE ${mountPath}; then
+            mkdir -p ${mountPath}
+            mount ${nvmePath} ${mountPath}
+        fi
+
+        # Add to fstab if not already present
+        if ! grep -q "${nvmePath}" /etc/fstab; then
+            echo ${nvmePath} ${mountPath} xfs defaults,nofail 0 2 >> /etc/fstab
+        fi
+
+        # Update Docker root location and restart Docker service
+        mkdir -p ${mountPath}/docker
+        echo '{"data-root": "${mountPath}/docker"}' > /etc/docker/daemon.json
+        systemctl restart docker
+      `;
+      /* eslint-enable no-useless-escape */
+
+      // Create mount point for container
+      const sourceVolume = 'nvme';
+      const host: Host = { sourcePath: config.nvmeHostMountPath };
+      const nvmeVolume: Volume = { name: sourceVolume, host: host };
+      const nvmeMountPoint: MountPoint = {
+        sourceVolume: sourceVolume,
+        containerPath: config.nvmeContainerMountPath,
+        readOnly: false,
+      };
+      volumes.push(nvmeVolume);
+      mountPoints.push(nvmeMountPoint);
+    }
+
+    if (config.region.includes('iso')) {
+      const pkiSourceVolume = 'pki';
+      const pkiHost: Host = { sourcePath: '/etc/pki' };
+      const pkiVolume: Volume = { name: pkiSourceVolume, host: pkiHost };
+      const pkiMountPoint: MountPoint = {
+        sourceVolume: pkiSourceVolume,
+        containerPath: '/etc/pki',
+        readOnly: false,
+      };
+      volumes.push(pkiVolume);
+      mountPoints.push(pkiMountPoint);
+      // Requires mount point /etc/pki from host
+      environment.SSL_CERT_DIR = '/etc/pki/tls/certs';
+      environment.SSL_CERT_FILE = config.certificateAuthorityBundle;
+    }
+
+    // Create and configure autoscaling groups and container assets
+    let service;
     let autoScalingGroup;
     if (taskConfig.serverType === ServerType.EC2) {
+      if (taskConfig.containerConfig.image.type !== EcsSourceType.ASSET) {
+        throw new Error('Only ImageSourceAssets are supported for EC2 based deployments.');
+      }
+
+      // Build and push docker image
+      const assetImage = new DockerImageAsset(this, createCdkId([identifier, 'DockerImage']), {
+        directory: taskConfig.containerConfig.image.path,
+        buildArgs: buildArgs,
+      });
+
+      // Add pull permissions for task role
+      assetImage.repository.grantPull(taskRole);
+
+      // Add necessary policies to the role
+      taskRole.addManagedPolicy(iam.ManagedPolicy.fromAwsManagedPolicyName('AmazonEC2ContainerRegistryReadOnly'));
+      taskRole.addManagedPolicy(iam.ManagedPolicy.fromAwsManagedPolicyName('AmazonSSMManagedInstanceCore'));
+
+      // Update user data script
+      const envVarString = Object.keys(environment)
+        .map((key) => `-e ${key}="${environment[key]}"`)
+        .join(' \\\n');
+
+      let extraDockerArgs = '';
+      if (Ec2Metadata.get(taskConfig.instanceType).gpuCount > 0) {
+        extraDockerArgs = `--gpus all -v ${config.nvmeHostMountPath}/model:${environment.LOCAL_MODEL_PATH}`;
+      }
+
+      const asgLogicalId = `${config.deploymentName}${identifier}ASG`;
+      /* eslint-disable no-useless-escape */
+      rawUserDataScript += `
+        aws ecr get-login-password --region ${config.region} | docker login --username AWS --password-stdin ${
+          assetImage.repository!.repositoryUri
+        }
+        docker pull ${assetImage.repository.repositoryUri}:${assetImage.imageTag}
+        docker run -d \\
+          ${extraDockerArgs} --privileged \\
+          -p 80:8080 \\
+          --restart always \\
+          ${envVarString} \\
+          ${assetImage.repository.repositoryUri}:${assetImage.imageTag}
+
+          # Wait for the Docker container to be healthy before proceeding with deployment
+          until [ $(curl -o /dev/null -s -w "%{http_code}" http://localhost:80/health) -eq 200 ];
+            do echo "Waiting for the web app to be healthy...";
+            sleep 5;
+          done
+
+          # Signal to CloudFormation that the instance is ready
+          /opt/aws/bin/cfn-signal -e $? --stack ${Stack.of(this).stackName} --resource ${asgLogicalId} --region ${
+            config.region
+          }
+      `;
+      /* eslint-enable no-useless-escape */
+
+      // Create multipart user data to run script on every boot
+      const multipartUserData = new MultipartUserData();
+
+      // Add cloud-config part
+      const cloudConfig = UserData.forLinux();
+      cloudConfig.addCommands('cloud_final_modules:', '- [scripts-user, always]');
+      multipartUserData.addPart(MultipartBody.fromUserData(cloudConfig, 'text/cloud-config; charset="us-ascii"'));
+
+      // Add shell script part
+      const shellScript = UserData.forLinux();
+      shellScript.addCommands(rawUserDataScript);
+      multipartUserData.addPart(MultipartBody.fromUserData(shellScript, 'text/x-shellscript; charset="us-ascii"'));
+
       const machineImage = new LookupMachineImage({
         name: taskConfig.amiNamePattern!,
         filters: {
@@ -155,161 +340,26 @@ export class ServerCluster extends Construct {
         newInstancesProtectedFromScaleIn: false,
         defaultInstanceWarmup: Duration.seconds(taskConfig.autoScalingConfig.defaultInstanceWarmup),
         updatePolicy: UpdatePolicy.rollingUpdate(),
+        userData: multipartUserData,
+        signals: Signals.waitForMinCapacity({
+          timeout: Duration.seconds(taskConfig.autoScalingConfig.defaultInstanceWarmup),
+        }),
+        healthCheck: AsgHealthCheck.elb({
+          grace: Duration.seconds(taskConfig.loadBalancerConfig.healthCheckConfig.startPeriod),
+        }),
         blockDevices: [
           {
             deviceName: '/dev/xvda',
-            volume: BlockDeviceVolume.ebs(30, {
+            volume: BlockDeviceVolume.ebs(45, {
               encrypted: true,
             }),
           },
         ],
       });
-    } else {
-      // Create auto scaling group
-      autoScalingGroup = cluster!.addCapacity(createCdkId([identifier, 'ASG']), {
-        instanceType: new InstanceType(taskConfig.instanceType),
-        machineImage: EcsOptimizedImage.amazonLinux2(amiHardwareType),
-        minCapacity: taskConfig.autoScalingConfig.minCapacity,
-        maxCapacity: taskConfig.autoScalingConfig.maxCapacity,
-        cooldown: Duration.seconds(taskConfig.autoScalingConfig.cooldown),
-        groupMetrics: [GroupMetrics.all()],
-        instanceMonitoring: Monitoring.DETAILED,
-        newInstancesProtectedFromScaleIn: false,
-        defaultInstanceWarmup: Duration.seconds(taskConfig.autoScalingConfig.defaultInstanceWarmup),
-        blockDevices: [
-          {
-            deviceName: '/dev/xvda',
-            volume: BlockDeviceVolume.ebs(30, {
-              encrypted: true,
-            }),
-          },
-        ],
-      });
-    }
 
-    // Configure user data script and mount NVMe
-    const volumes: Volume[] = [];
-    const mountPoints: MountPoint[] = [];
-    /* eslint-disable no-useless-escape */
-    let rawUserData = `#!/bin/bash
-      set -e
-      # Install Docker if not installed
-      if ! command -v docker &> /dev/null; then
-        yum -y install docker
-        service docker start
-      fi
-    `;
-
-    // If NVMe drive available, mount and use it
-    if (Ec2Metadata.get(taskConfig.instanceType).nvmePath && !taskConfig.amiNamePattern) {
-      // EC2 user data to mount ephemeral NVMe drive
-      const mountPath = config.nvmeHostMountPath;
-      const nvmePath = Ec2Metadata.get(taskConfig.instanceType).nvmePath;
-      rawUserData += `
-        # Check if NVMe is already formatted
-        if ! blkid ${nvmePath}; then
-            mkfs.xfs ${nvmePath}
-        fi
-
-        mkdir -p ${mountPath}
-        mount ${nvmePath} ${mountPath}
-
-        # Add to fstab if not already present
-        if ! grep -q "${nvmePath}" /etc/fstab; then
-            echo ${nvmePath} ${mountPath} xfs defaults,nofail 0 2 >> /etc/fstab
-        fi
-
-        # Update Docker root location and restart Docker service
-        mkdir -p ${mountPath}/docker
-        echo '{\"data-root\": \"${mountPath}/docker\"}' | tee /etc/docker/daemon.json
-        systemctl restart docker
-      `;
-      /* eslint-enable no-useless-escape */
-
-      // Create mount point for container
-      const sourceVolume = 'nvme';
-      const host: Host = { sourcePath: config.nvmeHostMountPath };
-      const nvmeVolume: Volume = { name: sourceVolume, host: host };
-      const nvmeMountPoint: MountPoint = {
-        sourceVolume: sourceVolume,
-        containerPath: config.nvmeContainerMountPath,
-        readOnly: false,
-      };
-      volumes.push(nvmeVolume);
-      mountPoints.push(nvmeMountPoint);
-    } else if (taskConfig.amiNamePattern?.includes('Deep Learning')) {
-      // DLAMIs mount the nvme to /opt/dlami/nvme for us
-      rawUserData += `
-        # Update Docker root location and restart Docker service
-        mkdir -p /opt/dlami/nvme/docker
-        echo '{"data-root": "/opt/dlami/nvme/docker"}' | tee /etc/docker/daemon.json
-        systemctl restart docker
-      `;
-    }
-
-    // Add permissions to use SSM in dev environment for EC2 debugging purposes only
-    if (config.deploymentStage === 'dev') {
-      autoScalingGroup.role.addManagedPolicy(ManagedPolicy.fromAwsManagedPolicyName('AmazonSSMFullAccess'));
-    }
-
-    if (config.region.includes('iso')) {
-      const pkiSourceVolume = 'pki';
-      const pkiHost: Host = { sourcePath: '/etc/pki' };
-      const pkiVolume: Volume = { name: pkiSourceVolume, host: pkiHost };
-      const pkiMountPoint: MountPoint = {
-        sourceVolume: pkiSourceVolume,
-        containerPath: '/etc/pki',
-        readOnly: false,
-      };
-      volumes.push(pkiVolume);
-      mountPoints.push(pkiMountPoint);
-      // Requires mount point /etc/pki from host
-      environment.SSL_CERT_DIR = '/etc/pki/tls/certs';
-      environment.SSL_CERT_FILE = config.certificateAuthorityBundle;
-    }
-
-    // Create and configure container assets
-    let service;
-    if (taskConfig.serverType === ServerType.EC2) {
-      if (taskConfig.containerConfig.image.type !== EcsSourceType.ASSET) {
-        throw new Error('Only ImageSourceAssets are supported for EC2 based deployments.');
-      }
-      // Build and push docker image
-      const assetImage = new DockerImageAsset(this, createCdkId([identifier, 'DockerImage']), {
-        directory: taskConfig.containerConfig.image.path,
-        buildArgs: buildArgs,
-      });
-
-      // Add pull permissions for task role
-      assetImage.repository.grantPull(taskRole);
-
-      // Add necessary policies to the role
-      taskRole.addManagedPolicy(iam.ManagedPolicy.fromAwsManagedPolicyName('AmazonEC2ContainerRegistryReadOnly'));
-      taskRole.addManagedPolicy(iam.ManagedPolicy.fromAwsManagedPolicyName('AmazonSSMManagedInstanceCore'));
-
-      // Update user data script
-      const envVarString = Object.keys(environment)
-        .map((key) => `-e ${key}="${environment[key]}"`)
-        .join(' \\\n');
-
-      let extraDockerArgs = '';
-      if (Ec2Metadata.get(taskConfig.instanceType).gpuCount > 0) {
-        extraDockerArgs = `--gpus all`;
-      }
-      /* eslint-disable no-useless-escape */
-      rawUserData += `
-aws ecr get-login-password --region ${config.region} | docker login --username AWS --password-stdin ${
-        assetImage.repository!.repositoryUri
-      }
-docker pull ${assetImage.repository.repositoryUri}:${assetImage.imageTag}
-docker run -d \\
-  ${extraDockerArgs} --privileged \\
-  -p 80:8080 \\
-  ${envVarString} \\
-  ${assetImage.repository.repositoryUri}:${assetImage.imageTag}
-`;
-      /* eslint-enable no-useless-escape */
-
+      // Override the ASG logical ID so the userData script can signal it
+      const cfnAsg = autoScalingGroup.node.defaultChild as CfnElement;
+      cfnAsg.overrideLogicalId(asgLogicalId);
       service = autoScalingGroup;
     } else {
       // Create ECS task definition
@@ -384,14 +434,40 @@ docker run -d \\
         taskDefinition: taskDefinition,
         circuitBreaker: !config.region.includes('iso') ? { rollback: true } : undefined,
       };
-
       service = new Ec2Service(this, createCdkId([identifier, 'Ec2Svc']), serviceProps);
 
+      // Create auto scaling group
+      autoScalingGroup = cluster!.addCapacity(createCdkId([identifier, 'ASG']), {
+        instanceType: new InstanceType(taskConfig.instanceType),
+        machineImage: EcsOptimizedImage.amazonLinux2(amiHardwareType),
+        minCapacity: taskConfig.autoScalingConfig.minCapacity,
+        maxCapacity: taskConfig.autoScalingConfig.maxCapacity,
+        cooldown: Duration.seconds(taskConfig.autoScalingConfig.cooldown),
+        groupMetrics: [GroupMetrics.all()],
+        instanceMonitoring: Monitoring.DETAILED,
+        newInstancesProtectedFromScaleIn: false,
+        defaultInstanceWarmup: Duration.seconds(taskConfig.autoScalingConfig.defaultInstanceWarmup),
+        blockDevices: [
+          {
+            deviceName: '/dev/xvda',
+            volume: BlockDeviceVolume.ebs(30, {
+              encrypted: true,
+            }),
+          },
+        ],
+      });
+
+      // Add final user data script to ASG
+      autoScalingGroup.addUserData(rawUserDataScript);
+
+      // Ensure service depends on ASG deployment
       service.node.addDependency(autoScalingGroup);
     }
 
-    // Add final user data script to ASG
-    autoScalingGroup.addUserData(rawUserData);
+    // Add permissions to use SSM in dev environment for EC2 debugging purposes only
+    if (config.deploymentStage === 'dev') {
+      autoScalingGroup.role.addManagedPolicy(ManagedPolicy.fromAwsManagedPolicyName('AmazonSSMFullAccess'));
+    }
 
     // Create application load balancer
     const loadBalancer = new ApplicationLoadBalancer(this, createCdkId([identifier, 'ALB']), {

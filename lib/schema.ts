@@ -393,6 +393,7 @@ const ContainerConfigSchema = z.object({
  * @property {string} path - Path for the health check.
  * @property {number} [interval=30] - Interval in seconds between health checks.
  * @property {number} [timeout=10] - Timeout in seconds for each health check.
+ * @property {number} [startPeriod=60] - The time in seconds to wait before starting the first health check.
  * @property {number} [healthyThresholdCount=2] - Number of consecutive successful health checks required to consider
  *                                                the target healthy.
  * @property {number} [unhealthyThresholdCount=2] - Number of consecutive failed health checks required to consider the
@@ -402,6 +403,7 @@ const HealthCheckConfigSchema = z.object({
   path: z.string(),
   interval: z.number().default(30),
   timeout: z.number().default(10),
+  startPeriod: z.number().default(60),
   healthyThresholdCount: z.number().default(2),
   unhealthyThresholdCount: z.number().default(2),
 });
@@ -425,15 +427,12 @@ const LoadBalancerConfigSchema = z.object({
  * @property {string} AlbMetricName - Name of the ALB metric.
  * @property {number} targetValue - Target value for the metric.
  * @property {number} [duration=60] - Duration in seconds for metric evaluation.
- * @property {number} [estimatedInstanceWarmup=180] - Estimated warm-up time in seconds until a newly launched instance
- *                                                    can send metrics to CloudWatch.
  *
  */
 const MetricConfigSchema = z.object({
   AlbMetricName: z.string(),
   targetValue: z.number(),
   duration: z.number().default(60),
-  estimatedInstanceWarmup: z.number().min(0).default(180),
 });
 
 /**
