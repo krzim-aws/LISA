@@ -37,7 +37,7 @@ from ...base import (
 from ...registry import registry
 
 
-class EcsTextGenTgiValidator(BaseModel):
+class TextGenTgiValidator(BaseModel):
     """Model kwargs validator for ECS text generation TGI model endpoints.
 
     Parameters
@@ -95,7 +95,7 @@ class EcsTextGenTgiValidator(BaseModel):
     watermark: bool = False
 
 
-class EcsTextGenTgiAdapter(TextGenModelAdapter, StreamTextGenModelAdapter):
+class TextGenTgiAdapter(TextGenModelAdapter, StreamTextGenModelAdapter):
     """Model adapter for ECS text generation TGI model endpoints.
 
     Parameters
@@ -234,6 +234,11 @@ class EcsTextGenTgiAdapter(TextGenModelAdapter, StreamTextGenModelAdapter):
 # Register the model
 registry.register(
     provider="ecs.textgen.tgi",
-    adapter=EcsTextGenTgiAdapter,
-    validator=EcsTextGenTgiValidator,
+    adapter=TextGenTgiAdapter,
+    validator=TextGenTgiValidator,
+)
+registry.register(
+    provider="ec2.textgen.tgi",
+    adapter=TextGenTgiAdapter,
+    validator=TextGenTgiValidator,
 )

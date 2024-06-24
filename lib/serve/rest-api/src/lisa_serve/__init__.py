@@ -20,7 +20,7 @@ import sys
 
 from loguru import logger
 
-from .ecs import *  # noqa: F403,F401
+from .ecs_and_ec2 import *  # noqa: F403,F401
 
 # Configure custom logger
 logger.remove()

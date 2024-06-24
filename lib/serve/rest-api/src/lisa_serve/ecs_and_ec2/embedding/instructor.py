@@ -13,7 +13,7 @@
 #   limitations under the License.
 
 """Model adapter and kwargs validator for ECS embedding instructor model endpoints."""
-from typing import Any, Dict, Union
+from typing import Any, Dict
 
 from aiohttp import ClientSession
 from loguru import logger
@@ -23,23 +23,20 @@ from ...base import EmbeddingModelAdapter, EmbedQueryResponse, escape_curly_brac
 from ...registry import registry
 
 
-class EcsEmbeddingTeiValidator(BaseModel):
-    """Model kwargs validator for ECS TEI model endpoints.
+class EmbeddingInstructorValidator(BaseModel):
+    """Model kwargs validator for ECS embedding instructor model endpoints.
 
     Parameters
     ----------
-    normalize : bool, default=True
-        Normalizes embeddings when enabled.
-    truncate : bool, default=True
-        Truncates inputs to model context length when enabled.
+    instruction : str, default="Represent the document:"
+        Instructor for customized embeddings.
     """
 
-    normalize: bool = True
-    truncate: bool = True
+    instruction: str = "Represent the document:"
 
 
-class EcsEmbeddingTeiAdapter(EmbeddingModelAdapter):
-    """Model adapter for ECS TEI model endpoints.
+class EmbeddingInstructorAdapter(EmbeddingModelAdapter):
+    """Model adapter for ECS embedding instructor model endpoints.
 
     Parameters
     ----------
@@ -53,15 +50,16 @@ class EcsEmbeddingTeiAdapter(EmbeddingModelAdapter):
     def __init__(self, *, model_name: str, endpoint_url: str) -> None:
         super().__init__(model_name=model_name, endpoint_url=endpoint_url)
 
-        self.endpoint_url = endpoint_url.rstrip("/")
+        # PyTorch DLC has the endpoint at path /predictions/model
+        self.endpoint_url = f"{self.endpoint_url.rstrip('/')}/predictions/model"  # type: ignore
 
-    async def embed_query(self, *, text: Union[str, list[str]], model_kwargs: Dict[str, Any]) -> EmbedQueryResponse:  # type: ignore # noqa: E501
+    async def embed_query(self, *, text: str, model_kwargs: Dict[str, Any]) -> EmbedQueryResponse:  # type: ignore
         """Embed data.
 
         Parameters
         ----------
-        text : Union[str, list[str]]
-            Input text(s) to embed.
+        text : str
+            Input text to embed.
 
         model_kwargs : Dict[str, Any]
             Arguments and configurations specific to the model.
@@ -72,12 +70,14 @@ class EcsEmbeddingTeiAdapter(EmbeddingModelAdapter):
             Embedding model response.
         """
         # Unpack instruction
-        payload = {"inputs": text, **model_kwargs}
+        instruction = model_kwargs["instruction"]
+        payload = {
+            "instruction": instruction,
+            "text": text,
+        }
 
         async with ClientSession() as session:
-            async with session.post(
-                self.endpoint_url, json=payload, headers={"Content-Type": "application/json"}
-            ) as server_response:
+            async with session.post(self.endpoint_url, json=payload) as server_response:
                 server_response.raise_for_status()
                 server_response_json = await server_response.json()
 
@@ -92,7 +92,12 @@ class EcsEmbeddingTeiAdapter(EmbeddingModelAdapter):
 
 # Register the model
 registry.register(
-    provider="ecs.embedding.tei",
-    adapter=EcsEmbeddingTeiAdapter,
-    validator=EcsEmbeddingTeiValidator,
+    provider="ecs.embedding.instructor",
+    adapter=EmbeddingInstructorAdapter,
+    validator=EmbeddingInstructorValidator,
+)
+registry.register(
+    provider="ec2.embedding.instructor",
+    adapter=EmbeddingInstructorAdapter,
+    validator=EmbeddingInstructorValidator,
 )
