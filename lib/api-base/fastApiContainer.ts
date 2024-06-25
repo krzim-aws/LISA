@@ -69,15 +69,25 @@ export class FastApiContainer extends Construct {
     const { config, apiName, securityGroup, taskConfig, tokenTable, modelsPsName, vpc } = props;
 
     let buildArgs: Record<string, string> | undefined = undefined;
-    if (taskConfig.containerConfig.image.type === EcsSourceType.ASSET) {
+    let environment: Record<string, string> = {};
+    if (taskConfig.containerConfig && taskConfig.containerConfig.image.type === EcsSourceType.ASSET) {
       buildArgs = {
         BASE_IMAGE: taskConfig.containerConfig.image.baseImage,
         PYPI_INDEX_URL: config.pypiConfig.indexUrl,
         PYPI_TRUSTED_HOST: config.pypiConfig.trustedHost,
         LITELLM_CONFIG: yamlDump(config.litellmConfig),
       };
+    } else {
+      environment = {
+        ...environment,
+        PYPI_INDEX_URL: config.pypiConfig.indexUrl,
+        PYPI_TRUSTED_HOST: config.pypiConfig.trustedHost,
+        LITELLM_CONFIG: yamlDump(config.litellmConfig),
+      };
     }
-    const environment: Record<string, string> = {
+
+    environment = {
+      ...environment,
       LOG_LEVEL: config.logLevel,
       AWS_REGION: config.region,
       AWS_REGION_NAME: config.region, // for supporting SageMaker endpoints in LiteLLM

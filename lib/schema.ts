@@ -365,24 +365,11 @@ const ImageRegistryAsset = z.object({
  * Configuration for a container.
  *
  * @property {string} baseImage - Base image for the container.
- * @property {Record<string, string>} [environment={}] - Environment variables for the container.
  * @property {ContainerHealthCheckConfig} [healthCheckConfig={}] - Health check configuration for the container.
  * @property {number} [sharedMemorySize=0] - The value for the size of the /dev/shm volume.
  */
 const ContainerConfigSchema = z.object({
   image: z.union([ImageTarballAsset, ImageSourceAsset, ImageECRAsset, ImageRegistryAsset]),
-  environment: z
-    .record(z.any())
-    .transform((obj) => {
-      return Object.entries(obj).reduce(
-        (acc, [key, value]) => {
-          acc[key] = String(value);
-          return acc;
-        },
-        {} as Record<string, string>,
-      );
-    })
-    .default({}),
   sharedMemorySize: z.number().min(0).optional().default(0),
   healthCheckConfig: ContainerHealthCheckConfigSchema.default({}),
 });
@@ -457,18 +444,36 @@ const AutoScalingConfigSchema = z.object({
  * Base configuration schema for a task.
  *
  * @property {ServerType} serverType - Type of server to use for the task.
- * @property {ContainerConfig} containerConfig - Configuration for the container.
+ * @property {ContainerConfig} containerConfig - Configuration for the task container.
  * @property {string} instanceType - EC2 instance type for running the model.
  * @property {AutoScalingConfigSchema} autoScalingConfig - Configuration for auto scaling settings.
  * @property {LoadBalancerConfig} loadBalancerConfig - Configuration for load balancer settings.
+ * @property {string} [amiNamePattern=null] - Pattern to use to search for the AMI to use.
+ * @property {string} [amiId=null] - ID of the AMI to use.
+ * @property {string} [userDataScriptPath=null] - Path to the user data script.
+ * @property {Record<string, string>} [environment={}] - Environment variables for the task.
  */
 const TaskConfigSchema = z.object({
   serverType: z.nativeEnum(ServerType).optional().default(ServerType.ECS),
-  containerConfig: ContainerConfigSchema,
+  containerConfig: ContainerConfigSchema.optional(),
   instanceType: z.enum(VALID_INSTANCE_KEYS),
   autoScalingConfig: AutoScalingConfigSchema,
   loadBalancerConfig: LoadBalancerConfigSchema,
   amiNamePattern: z.string().optional(),
+  amiId: z.string().optional(),
+  userDataScriptPath: z.string().optional(),
+  environment: z
+    .record(z.any())
+    .transform((obj) => {
+      return Object.entries(obj).reduce(
+        (acc, [key, value]) => {
+          acc[key] = String(value);
+          return acc;
+        },
+        {} as Record<string, string>,
+      );
+    })
+    .default({}),
 });
 
 export type TaskConfig = z.infer<typeof TaskConfigSchema>;
@@ -514,10 +519,19 @@ const ModelConfigSchema = TaskConfigSchema.extend({
   )
   .refine(
     (data) => {
-      return data.amiNamePattern || data.serverType !== ServerType.EC2;
+      return data.amiNamePattern || data.amiId || data.serverType !== ServerType.EC2;
     },
     {
       message: `An AMI name search pattern must be provided for EC2 based deployments`,
+      path: ['amiNamePattern'],
+    },
+  )
+  .refine(
+    (data) => {
+      return data.amiNamePattern || data.amiId;
+    },
+    {
+      message: `An AMI name search pattern or an AMI ID must be provided but not both.`,
       path: ['amiNamePattern'],
     },
   );
@@ -551,15 +565,25 @@ const AuthConfigSchema = z.object({
  */
 const FastApiContainerConfigSchema = TaskConfigSchema.extend({
   apiVersion: z.literal('v2'),
-}).refine(
-  (data) => {
-    return data.amiNamePattern || data.serverType !== ServerType.EC2;
-  },
-  {
-    message: `An AMI name search pattern must be provided for EC2 based deployments`,
-    path: ['amiNamePattern'],
-  },
-);
+})
+  .refine(
+    (data) => {
+      return data.amiNamePattern || data.amiId || data.serverType !== ServerType.EC2;
+    },
+    {
+      message: `An AMI name search pattern must be provided for EC2 based deployments`,
+      path: ['amiNamePattern'],
+    },
+  )
+  .refine(
+    (data) => {
+      return data.amiNamePattern || data.amiId;
+    },
+    {
+      message: `An AMI name search pattern or an AMI ID must be provided but not both.`,
+      path: ['amiNamePattern'],
+    },
+  );
 
 /**
  * Type representing configuration for an FastAPI container.

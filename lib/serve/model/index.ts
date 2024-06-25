@@ -106,11 +106,22 @@ export class Model extends Construct {
       environment.THREADS = Math.ceil(Ec2Metadata.get(modelConfig.instanceType).vCpus / 2).toString();
     }
 
-    if (modelConfig.containerConfig.environment) {
-      for (const [key, value] of Object.entries(modelConfig.containerConfig.environment)) {
+    if (modelConfig.environment) {
+      for (const [key, value] of Object.entries(modelConfig.environment)) {
         if (value !== null) {
           environment[key] = String(value);
         }
+      }
+    }
+
+    // Inject pypi and conda index URLs at runtime when not using docker
+    if (!modelConfig.containerConfig) {
+      if (config.pypiConfig.indexUrl) {
+        environment.PYPI_INDEX_URL = config.pypiConfig.indexUrl;
+        environment.PYPI_TRUSTED_HOST = config.pypiConfig.trustedHost;
+      }
+      if (config.condaUrl) {
+        environment.CONDA_URL = config.condaUrl;
       }
     }
 
@@ -127,7 +138,7 @@ export class Model extends Construct {
    *                   the arguments for the Docker build.
    */
   private getBuildArguments(config: Config, modelConfig: ModelConfig): { [key: string]: string } | undefined {
-    if (modelConfig.containerConfig.image.type !== EcsSourceType.ASSET) {
+    if (!modelConfig.containerConfig || modelConfig.containerConfig.image.type !== EcsSourceType.ASSET) {
       return undefined;
     }
 

@@ -15,6 +15,8 @@
 */
 
 // Server Cluster Construct.
+import { readFileSync } from 'fs';
+
 import { CfnElement, Duration, RemovalPolicy, Stack } from 'aws-cdk-lib';
 import {
   AutoScalingGroup,
@@ -27,6 +29,7 @@ import {
 } from 'aws-cdk-lib/aws-autoscaling';
 import { Metric, Stats } from 'aws-cdk-lib/aws-cloudwatch';
 import {
+  GenericLinuxImage,
   InstanceType,
   IVpc,
   LookupMachineImage,
@@ -249,60 +252,64 @@ export class ServerCluster extends Construct {
     // Create and configure autoscaling groups and container assets
     let service;
     let autoScalingGroup;
+    const asgLogicalId = `${config.deploymentName}${identifier}ASG`;
     if (taskConfig.serverType === ServerType.EC2) {
-      if (taskConfig.containerConfig.image.type !== EcsSourceType.ASSET) {
-        throw new Error('Only ImageSourceAssets are supported for EC2 based deployments.');
-      }
-
-      // Build and push docker image
-      const assetImage = new DockerImageAsset(this, createCdkId([identifier, 'DockerImage']), {
-        directory: taskConfig.containerConfig.image.path,
-        buildArgs: buildArgs,
-      });
-
-      // Add pull permissions for task role
-      assetImage.repository.grantPull(taskRole);
-
-      // Add necessary policies to the role
-      taskRole.addManagedPolicy(iam.ManagedPolicy.fromAwsManagedPolicyName('AmazonEC2ContainerRegistryReadOnly'));
-      taskRole.addManagedPolicy(iam.ManagedPolicy.fromAwsManagedPolicyName('AmazonSSMManagedInstanceCore'));
-
-      // Update user data script
-      const envVarString = Object.keys(environment)
-        .map((key) => `-e ${key}="${environment[key]}"`)
-        .join(' \\\n');
-
-      let extraDockerArgs = '';
-      if (Ec2Metadata.get(taskConfig.instanceType).gpuCount > 0) {
-        extraDockerArgs = `--gpus all -v ${config.nvmeHostMountPath}/model:${environment.LOCAL_MODEL_PATH}`;
-      }
-
-      const asgLogicalId = `${config.deploymentName}${identifier}ASG`;
-      /* eslint-disable no-useless-escape */
-      rawUserDataScript += `
-        aws ecr get-login-password --region ${config.region} | docker login --username AWS --password-stdin ${
-          assetImage.repository!.repositoryUri
+      if (taskConfig.containerConfig) {
+        if (taskConfig.containerConfig.image.type !== EcsSourceType.ASSET) {
+          throw new Error('Only ImageSourceAssets are supported for EC2 based deployments.');
         }
-        docker pull ${assetImage.repository.repositoryUri}:${assetImage.imageTag}
-        docker run -d \\
-          ${extraDockerArgs} --privileged \\
-          -p 80:8080 \\
-          --restart always \\
-          ${envVarString} \\
-          ${assetImage.repository.repositoryUri}:${assetImage.imageTag}
 
-          # Wait for the Docker container to be healthy before proceeding with deployment
-          until [ $(curl -o /dev/null -s -w "%{http_code}" http://localhost:80/health) -eq 200 ];
-            do echo "Waiting for the web app to be healthy...";
-            sleep 5;
-          done
+        // Build and push docker image
+        const assetImage = new DockerImageAsset(this, createCdkId([identifier, 'DockerImage']), {
+          directory: taskConfig.containerConfig.image.path,
+          buildArgs: buildArgs,
+        });
 
-          # Signal to CloudFormation that the instance is ready
-          /opt/aws/bin/cfn-signal -e $? --stack ${Stack.of(this).stackName} --resource ${asgLogicalId} --region ${
-            config.region
+        // Add pull permissions for task role
+        assetImage.repository.grantPull(taskRole);
+
+        // Add necessary policies to the role
+        taskRole.addManagedPolicy(iam.ManagedPolicy.fromAwsManagedPolicyName('AmazonEC2ContainerRegistryReadOnly'));
+        taskRole.addManagedPolicy(iam.ManagedPolicy.fromAwsManagedPolicyName('AmazonSSMManagedInstanceCore'));
+
+        // Update user data script
+        const envVarString = Object.keys(environment)
+          .map((key) => `-e ${key}="${environment[key]}"`)
+          .join(' \\\n');
+
+        let extraDockerArgs = '';
+        if (Ec2Metadata.get(taskConfig.instanceType).gpuCount > 0) {
+          extraDockerArgs = `--gpus all -v ${config.nvmeHostMountPath}/model:${environment.LOCAL_MODEL_PATH}`;
+        }
+
+        /* eslint-disable no-useless-escape */
+        rawUserDataScript += `
+          aws ecr get-login-password --region ${config.region} | docker login --username AWS --password-stdin ${
+            assetImage.repository!.repositoryUri
           }
+          docker pull ${assetImage.repository.repositoryUri}:${assetImage.imageTag}
+          docker run -d \\
+            ${extraDockerArgs} --privileged \\
+            -p 80:8080 \\
+            --restart always \\
+            ${envVarString} \\
+            ${assetImage.repository.repositoryUri}:${assetImage.imageTag}
+        `;
+        /* eslint-enable no-useless-escape */
+      }
+
+      const userDataHealthCheck = `
+        # Wait for the Docker container to be healthy before proceeding with deployment
+        until [ $(curl -o /dev/null -s -w "%{http_code}" http://localhost:80/health) -eq 200 ];
+          do echo "Waiting for the web app to be healthy...";
+          sleep 5;
+        done
+
+        # Signal to CloudFormation that the instance is ready
+        /opt/aws/bin/cfn-signal -e 0 --stack ${Stack.of(this).stackName} --resource ${asgLogicalId} --region ${
+          config.region
+        }
       `;
-      /* eslint-enable no-useless-escape */
 
       // Create multipart user data to run script on every boot
       const multipartUserData = new MultipartUserData();
@@ -314,17 +321,34 @@ export class ServerCluster extends Construct {
 
       // Add shell script part
       const shellScript = UserData.forLinux();
-      shellScript.addCommands(rawUserDataScript);
+      if (taskConfig.userDataScriptPath) {
+        const userDataScript = readFileSync(taskConfig.userDataScriptPath, 'utf8');
+
+        // Inject env vars
+        const envVarString = Object.keys(environment)
+          .map((key) => `export ${key}="${environment[key]}"`)
+          .join(' \\\n');
+        shellScript.addCommands(`${envVarString}\n\n${userDataScript}\n\n${userDataHealthCheck}`);
+      } else {
+        shellScript.addCommands(`${rawUserDataScript}\n\n${userDataHealthCheck}`);
+      }
       multipartUserData.addPart(MultipartBody.fromUserData(shellScript, 'text/x-shellscript; charset="us-ascii"'));
 
-      const machineImage = new LookupMachineImage({
-        name: taskConfig.amiNamePattern!,
-        filters: {
-          state: ['available'],
-        },
-        owners: ['amazon'],
-        windows: false,
-      });
+      let machineImage;
+      if (taskConfig.amiNamePattern) {
+        machineImage = new LookupMachineImage({
+          name: taskConfig.amiNamePattern!,
+          filters: {
+            state: ['available'],
+          },
+          owners: ['amazon'],
+          windows: false,
+        });
+      } else if (taskConfig.amiId) {
+        machineImage = new GenericLinuxImage({
+          [config.region]: taskConfig.amiId,
+        });
+      }
 
       // Create auto scaling group
       autoScalingGroup = new AutoScalingGroup(this, createCdkId([identifier, 'ASG']), {
@@ -361,7 +385,7 @@ export class ServerCluster extends Construct {
       const cfnAsg = autoScalingGroup.node.defaultChild as CfnElement;
       cfnAsg.overrideLogicalId(asgLogicalId);
       service = autoScalingGroup;
-    } else {
+    } else if (taskConfig.serverType === ServerType.ECS && taskConfig.containerConfig) {
       // Create ECS task definition
       const taskDefinition = new Ec2TaskDefinition(this, createCdkId([identifier, 'Ec2TaskDefinition']), {
         family: createCdkId([config.deploymentName, identifier], 32, 2),
@@ -462,6 +486,11 @@ export class ServerCluster extends Construct {
 
       // Ensure service depends on ASG deployment
       service.node.addDependency(autoScalingGroup);
+    } else {
+      throw new Error(
+        'Invalid server type or missing container config. ' +
+          'Ensure that you have provided a container config for ECS based deployments.',
+      );
     }
 
     // Add permissions to use SSM in dev environment for EC2 debugging purposes only
