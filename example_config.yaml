@@ -56,6 +56,8 @@ dev:
     apiVersion: v2
     # serverType: ec2
     # amiNamePattern: al2023-ami-2023*
+    # amiId: ami-08a0d1e16fc3f61ea
+    # userDataScriptPath: ./scripts/fastApiUserData.sh
     instanceType: m5.large
     containerConfig:
       image:
@@ -115,11 +117,13 @@ dev:
   ragFileProcessingConfig:
     chunkSize: 512
     chunkOverlap: 51
-  ecsModels:
+  models:
     - modelName: mistralai/Mistral-7B-Instruct-v0.2
       modelId: mistral7b
       # serverType: ec2
       # amiNamePattern: Deep Learning OSS Nvidia Driver AMI GPU PyTorch 2.2.0 (Ubuntu 20.04)*
+      # amiId: ami-0187a28a87881cc83
+      # userDataScriptPath: ./scripts/<custom-tgi-user-data-script>.sh
       deploy: true
       streaming: true
       modelType: textgen
@@ -137,10 +141,10 @@ dev:
           startPeriod: 30
           timeout: 5
           retries: 3
-        environment:
-          MAX_CONCURRENT_REQUESTS: 128
-          MAX_INPUT_LENGTH: 1024
-          MAX_TOTAL_TOKENS: 2048
+      environment:
+        MAX_CONCURRENT_REQUESTS: 128
+        MAX_INPUT_LENGTH: 1024
+        MAX_TOTAL_TOKENS: 2048
       autoScalingConfig:
         minCapacity: 1
         maxCapacity: 1
@@ -162,6 +166,8 @@ dev:
       modelId: e5v2
       # serverType: ec2
       # amiNamePattern: Deep Learning OSS Nvidia Driver AMI GPU PyTorch 2.2.0 (Ubuntu 20.04)*
+      # amiId: ami-0187a28a87881cc83
+      # userDataScriptPath: ./scripts/<custom-tei-user-data-script>.sh
       deploy: true
       modelType: embedding
       instanceType: g5.xlarge
@@ -178,10 +184,10 @@ dev:
           startPeriod: 30
           timeout: 5
           retries: 3
-        environment:
-          MAX_CONCURRENT_REQUESTS: 512
-          MAX_CLIENT_BATCH_SIZE: 1024
-          MAX_BATCH_TOKENS: 16384
+      environment:
+        MAX_CONCURRENT_REQUESTS: 512
+        MAX_CLIENT_BATCH_SIZE: 1024
+        MAX_BATCH_TOKENS: 16384
       autoScalingConfig:
         minCapacity: 1
         maxCapacity: 1

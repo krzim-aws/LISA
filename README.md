@@ -230,21 +230,21 @@ The [config.yaml](./config.yaml) file has many parameters and many of them can b
 
 #### Models To Be Deployed
 
-The configuration file will determine which models are deployed. In order to deploy an additional model or a different model the only required change is to the configuration file, as long as it is compatible with the inference container. Specifically, see the `ecsModels` section of the [config.yaml](./config.yaml) file:
+The configuration file will determine which models are deployed. In order to deploy an additional model or a different model the only required change is to the configuration file, as long as it is compatible with the inference container. Specifically, see the `models` section of the [config.yaml](./config.yaml) file:
 
 ```yaml
-  ecsModels:
+  models:
     - modelName: falcon-40b-instruct
       deploy: true
       instanceType: g4dn.12xlarge
       modelType: textgen
-      inferenceContainer: tgi
+      inferenceEngine: tgi
       containerConfig:
         baseImage: ghcr.io/huggingface/text-generation-inference:1.0.2
         ...
 ```
 
-Here we define the model name, if we want to deploy, the type of instance we want to deploy to, the type of model (textgen or embedding), the inference container and then the containerConfig. There are many more parameters for the ecs models, many for autoscaling and health checks. However, let's focus on the model specific ones:
+Here we define the model name, if we want to deploy, the type of instance we want to deploy to, the type of model (textgen or embedding), the inference container and then the containerConfig. There are many more parameters for the models, many for autoscaling and health checks. However, let's focus on the model specific ones:
 
 ```yaml
 environment:
@@ -273,13 +273,13 @@ web application at build time. In the event that you would like to use pre-built
 network connectivity reasons or other concerns with the environment where you'll be deploying LISA
 you can do so.
 
-- For ECS containers (Models, APIs, etc) you can modify the `containerConfig` block of
+- For ECS or EC2 hosted containers (Models, APIs, etc) you can modify the `containerConfig` block of
   the corresponding entry in `config.yaml`. For container images you can provide a path to a directory
   from which a docker container will be built (default), a path to a tarball, an ECR repository arn and
   optional tag, or a public registry path.
   - We provide immediate support for HuggingFace TGI and TEI containers and for vLLM containers. The `example_config.yaml`
     file provides examples for TGI and TEI, and the only difference for using vLLM is to change the
-    `inferenceContainer`, `baseImage`, and `path` options, as indicated in the snippet below. All other options can
+    `inferenceEngine`, `baseImage`, and `path` options, as indicated in the snippet below. All other options can
     remain the same as the model definition examples we have for the TGI or TEI models. vLLM can also support embedding
     models in this way, so all you need to do is refer to the embedding model artifacts and remove the `streaming` field
     to deploy the embedding model.
@@ -287,14 +287,14 @@ you can do so.
     the only supported embedding model with vLLM is [intfloat/e5-mistral-7b-instruct](https://huggingface.co/intfloat/e5-mistral-7b-instruct),
     but this list is expected to grow over time as vLLM updates.
     ```yaml
-    ecsModels:
+    models:
       - modelName: mistralai/Mistral-7B-Instruct-v0.2
         modelId: mistral7b-vllm
         deploy: true
         modelType: textgen # can also be 'embedding'
         streaming: true # remove option if modelType is 'embedding'
         instanceType: g5.xlarge
-        inferenceContainer: vllm # vLLM-specific config
+        inferenceEngine: vllm # vLLM-specific config
         containerConfig:
           image:
             baseImage: vllm/vllm-openai:v0.5.0 # vLLM-specific config
@@ -313,6 +313,16 @@ lambdaLayerAssets:
   commonLayerPath: lib/core/layers/common_layer.zip
   sdkLayerPath: lib/rag/layers/sdk_layer.zip
 ```
+
+### Using custom AMIs and UserData scripts
+
+Custom AMIs can be provided to run LISA in docker-on-EC2 or in containerless EC2 mode. We recommend running LISA models and REST APIs on ECS if possible but provide the option to run either containerized or containerless on EC2 in the rare cases where ECS is unallowed or unavailable.
+
+Provide an AMI ID or AMI name pattern to deploy the LISA models and APIs on EC2 using docker. We recommend the latest Amazon Linux 2023 AMI for the REST API and the Pytorch>=2.2 DLAMI for the model servers. If you provide a name pattern, the latest available matching AMI will be used.
+
+LISA can also be deployed on EC2 in a containerless fashion by providing an AMI ID or name pattern and a custom UserData script. We provide an example UserData script to launch the LISA-Serve FastAPI REST API in [scripts/fastApiUserData.sh](scripts/fastApiUserData.sh).
+
+Note that this feature is experimental and should only be used when a containerless deployment is absolutely necessary. All servers in the REST API and model instances must listen to traffic on port `80`. Any environment variables provided in the `environment` section of the config will be injected at the start of the custom UserData script. An additional CFN signal command will be appended to the end of the script to signal to Cloudformations that the ASG was able to successfully spin up the instance. Any servers spun up in the UserData script should spin up in daemon mode or be moved into the background to cede execution to this CFN signal command.
 
 ### Deploying
 
@@ -438,7 +448,7 @@ AutoModelForSeq2SeqLM.from_pretrained(<model>, device_map="auto")
 
 ### HuggingFace Embedding Models
 
-Embedding models often utilize custom codebases and are not as uniform as generation models. For this reason you will likely need to create a new `inferenceContainer`. Follow the [example](./lib/model/embedding/instructor) provided for the `instructor` model.
+Embedding models often utilize custom codebases and are not as uniform as generation models. For this reason you will likely need to create a new `inferenceEngine`. Follow the [example](./lib/model/embedding/instructor) provided for the `instructor` model.
 
 ### vLLM Models
 
