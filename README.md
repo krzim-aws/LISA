@@ -162,6 +162,8 @@ the scope of LISA, but we do recommend the following settings for a minimal setu
 assumes a SageMaker Endpoint called "test-endpoint," access to the "amazon.titan-text-express-v1" Bedrock Model, a self-hosted OpenAI-compatible
 text generation model with an endpoint you can access from the VPC, and a similarly configured embedding model. The SageMaker Endpoint and
 Bedrock Model must be in the same region as the LISA installation.
+By default, the LISA Serve REST API IAM role will have invoke permissions for all Bedrock models and all Sagemaker Endpoints.
+See [./lib/core/iam/ecs.json](./lib/core/iam/ecs.json#L194) for IAM policies.
 
 ```yaml
 dev:
