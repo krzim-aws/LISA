@@ -22,7 +22,6 @@
       ],
       "Resource": "*"
     },
-
     {
       "Effect": "Allow",
       "Action": [
@@ -191,6 +190,16 @@
           ]
         }
       }
+    },
+    {
+      "Effect": "Allow",
+      "Action": ["sagemaker:InvokeEndpoint", "sagemaker:InvokeEndpointAsync"],
+      "Resource": "*"
+    },
+    {
+      "Effect": "Allow",
+      "Action": ["bedrock:InvokeModel"],
+      "Resource": "*"
     }
   ]
 }

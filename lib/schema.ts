@@ -860,7 +860,7 @@ const RawConfigSchema = z
     ragRepositories: z.array(RagRepositoryConfigSchema).default([]),
     ragFileProcessingConfig: RagFileProcessingConfigSchema.optional(),
     restApiConfig: FastApiContainerConfigSchema,
-    ecsModels: z.array(EcsModelConfigSchema),
+    ecsModels: z.array(EcsModelConfigSchema).default([]),
     apiGatewayConfig: ApiGatewayConfigSchema.optional(),
     nvmeHostMountPath: z.string().default('/nvme'),
     nvmeContainerMountPath: z.string().default('/nvme'),
