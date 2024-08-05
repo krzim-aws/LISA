@@ -84,6 +84,7 @@ export class CustomAuthorizer extends Construct {
       role: role,
       vpc: vpc,
       securityGroups: securityGroups,
+      allowPublicSubnet: true,
     });
 
     // Update
