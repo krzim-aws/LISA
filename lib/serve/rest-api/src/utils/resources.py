@@ -13,57 +13,9 @@
 #   limitations under the License.
 
 """REST API resources."""
-from enum import Enum
-from typing import Any, Dict, List, Optional, Union
+from typing import Any, Dict, List, Optional
 
 from pydantic import BaseModel, Field
-
-
-class RestApiResource(str, Enum):
-    """REST API resource."""
-
-    # Model info
-    LIST_MODELS = "listModels"
-    DESCRIBE_MODEL = "describeModel"
-    DESCRIBE_MODELS = "describeModels"
-
-    # Run models
-    EMBEDDINGS = "embeddings"
-    GENERATE = "generate"
-    GENERATE_STREAM = "generateStream"
-
-    # OpenAI API Compatibility
-    OPENAI_LIST_MODELS = "openai/models"
-    OPENAI_COMPLETIONS = "openai/completions"
-    OPENAI_CHAT_COMPLETIONS = "openai/chat/completions"
-
-
-class ModelType(str, Enum):
-    """Valid model types."""
-
-    EMBEDDING = "embedding"
-    TEXTGEN = "textgen"
-
-
-class _BaseModelRequest(BaseModel):
-    """Base model resource."""
-
-    provider: str = Field(..., description="The backend provider for the model.")
-    modelName: str = Field(..., description="The model name.")
-    text: Union[str, list[str]] = Field(..., description="The input text(s) to be processed by the model.")
-    modelKwargs: Dict[str, Any] = Field(default={}, description="Arguments to the model.")
-
-
-class EmbeddingsRequest(_BaseModelRequest):
-    """Create text embeddings."""
-
-
-class GenerateRequest(_BaseModelRequest):
-    """Run text generation."""
-
-
-class GenerateStreamRequest(_BaseModelRequest):
-    """Run text generation with streaming."""
 
 
 class OpenAIChatCompletionsRequest(BaseModel):

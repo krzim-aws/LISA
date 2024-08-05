@@ -59,7 +59,9 @@ class OIDCHTTPBearer(HTTPBearer):
 
     def __init__(self, **kwargs: Dict[str, Any]):
         super().__init__(**kwargs)
-        self._token_authorizer = ApiTokenAuthorizer()
+        self._token_authorizer: Optional[ApiTokenAuthorizer] = None
+        if os.getenv(TOKEN_TABLE_NAME):
+            self._token_authorizer = ApiTokenAuthorizer()
 
         if ("SSL_CERT_DIR" not in os.environ) or ("SSL_CERT_FILE" not in os.environ):
             cert_path = None
@@ -77,8 +79,9 @@ class OIDCHTTPBearer(HTTPBearer):
 
     async def __call__(self, request: Request) -> Optional[HTTPAuthorizationCredentials]:
         """Verify the provided bearer token or API Key. API Key will take precedence over the bearer token."""
-        if self._token_authorizer.is_valid_api_token(request.headers):
-            return None  # valid API token, not continuing with OIDC auth
+        if self._token_authorizer:
+            if self._token_authorizer.is_valid_api_token(request.headers):
+                return None  # valid API token, not continuing with OIDC auth
         http_auth_creds = await super().__call__(request)
         if not self.id_token_is_valid(
             id_token=http_auth_creds.credentials, authority=os.environ["AUTHORITY"], client_id=os.environ["CLIENT_ID"]
