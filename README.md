@@ -475,7 +475,7 @@ export AWS_REGION=<Region where LISA is deployed>
 export AUTHORITY=<IdP Endpoint>
 export CLIENT_ID=<IdP Client Id>
 export REGISTERED_MODELS_PS_NAME=<Models ParameterName>
-export TOKEN_TABLE_NAME="<deployment prefix>/LISAApiTokenTable"
+export TOKEN_TABLE_NAME="${DEPLOYMENT_NAME}-LISAApiTokenTable"
 gunicorn -k uvicorn.workers.UvicornWorker -w 2 -b "0.0.0.0:8080" "src.main:app"
 ```
 
@@ -490,7 +490,8 @@ window.env = {
   // Alternatively you can set this to be your REST api elb endpoint
   RESTAPI_URI: 'http://localhost:8080/',
   RESTAPI_VERSION: 'v2',
-  SESSION_REST_API_URI: '<API GW session endpoint>',
+  RAG_ENABLED: <Whether or not RAG is deployed>,
+  API_BASE_URL: '<API GW URI for sessions/RAG>',
   "MODELS": [
     {
       "model": "streaming-textgen-model",
