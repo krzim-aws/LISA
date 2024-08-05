@@ -19,6 +19,9 @@ WORKDIR /app
 COPY src/requirements.txt .
 RUN pip install --no-cache-dir --upgrade -r requirements.txt
 
+# Install latest boto3 and botocore for best Bedrock feature coverage
+RUN pip install --no-cache-dir -U --upgrade-strategy eager boto3 botocore
+
 # Copy LiteLLM config directly to container, it will be updated at runtime
 # with LISA-hosted models. This filename is expected in the entrypoint.sh file, so do not modify
 # the filename unless you modify it in the entrypoint.sh file too.
